@@ -1,0 +1,148 @@
+use std::sync::LazyLock;
+
+use iced::{Center, color, Element, Fill, Subscription, Task, Theme};
+use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
+use iced::window::Position;
+use tracing::Level;
+
+mod server;
+
+fn main() -> iced::Result {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .try_init()
+        .expect("Failed to set up logger");
+
+    iced::application("P2P Iced", P2pApp::update, P2pApp::view)
+        .subscription(P2pApp::subscription)
+        .theme(P2pApp::theme)
+        .position(Position::Centered)
+        .run_with(P2pApp::new)
+}
+
+static MESSAGE_LOG: LazyLock<scrollable::Id> = LazyLock::new(scrollable::Id::unique);
+
+struct P2pApp {
+    messages: Vec<String>,
+    new_message: String,
+    state: State,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    NewMessageChanged(String),
+    Send(String),
+    Echo(String),
+    Server,
+}
+
+enum State {
+    Disconnected,
+    Connected(String),
+}
+
+impl P2pApp {
+    fn new() -> (Self, Task<Message>) {
+        (
+            Self {
+                messages: Vec::new(),
+                new_message: String::new(),
+                state: State::Disconnected,
+            },
+            Task::batch([
+                Task::perform(server::run(), |_| Message::Server),
+                widget::focus_next(),
+            ]),
+        )
+    }
+
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::NewMessageChanged(new_message) => {
+                self.new_message = new_message;
+
+                Task::none()
+            }
+            Message::Send(message) => match &mut self.state {
+                State::Connected(connection) => {
+                    self.new_message.clear();
+
+                    println!("Connected {connection} with message {message}");
+
+                    Task::none()
+                }
+                State::Disconnected => Task::none(),
+            },
+            Message::Echo(event) => {
+                println!("Echo {event}");
+                
+                Task::none()
+            },
+            /*Message::Echo(event) => match event {
+                echo::Event::Connected(connection) => {
+                    self.state = State::Connected(connection);
+                
+                    self.messages.push(echo::Message::connected());
+                
+                    Task::none()
+                }
+                echo::Event::Disconnected => {
+                    self.state = State::Disconnected;
+                
+                    self.messages.push(echo::Message::disconnected());
+                
+                    Task::none()
+                }
+                echo::Event::MessageReceived(message) => {
+                    self.messages.push(message);
+                
+                    scrollable::snap_to(MESSAGE_LOG.clone(), scrollable::RelativeOffset::END)
+                }
+            },*/
+            Message::Server => Task::none(),
+        }
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        Subscription::none()
+        //Subscription::run(echo::connect).map(Message::Echo)
+    }
+    
+    fn theme(&self) -> Theme {
+        Theme::Dark
+    }
+
+    fn view(&self) -> Element<Message> {
+        let message_log: Element<_> = if self.messages.is_empty() {
+            center(text("Your messages will appear here...").color(color!(0x888888))).into()
+        } else {
+            scrollable(column(self.messages.iter().map(text).map(Element::from)).spacing(10))
+                .id(MESSAGE_LOG.clone())
+                .height(Fill)
+                .into()
+        };
+
+        let new_message_input = {
+            let mut input = text_input("Type a message...", &self.new_message)
+                .on_input(Message::NewMessageChanged)
+                .padding(10);
+
+            let mut button = button(text("Send").height(40).align_y(Center)).padding([0, 20]);
+
+            if matches!(self.state, State::Connected(_)) {
+                // if let Some(message) = echo::Message::new(&self.new_message) {
+                //     input = input.on_submit(Message::Send(message.clone()));
+                //     button = button.on_press(Message::Send(message));
+                // }
+            }
+
+            row![input, button].spacing(10).align_y(Center)
+        };
+
+        column![message_log, new_message_input]
+            .height(Fill)
+            .padding(20)
+            .spacing(10)
+            .into()
+    }
+}
