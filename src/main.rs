@@ -1,12 +1,11 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use iced::{Center, color, Element, Fill, Subscription, Task, Theme};
 use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
 use iced::window::Position;
-use tracing::{info, Level};
+use tracing::{info, Level, warn};
 
-mod server;
-mod client;
+mod p2p;
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt()
@@ -51,7 +50,7 @@ impl P2pApp {
                 state: State::Disconnected,
             },
             Task::batch([
-                Task::perform(server::run(), |_| Message::Server),
+                Task::perform(p2p::run(), |_| Message::Server),
                 widget::focus_next(),
             ]),
         )
@@ -110,7 +109,20 @@ impl P2pApp {
     }
 
     fn theme(&self) -> Theme {
-        Theme::Dark
+        match dark_light::detect().expect("Failed to detect system theme") {
+            dark_light::Mode::Light => {
+                info!("Detected light system theme");
+                Theme::Light
+            }
+            dark_light::Mode::Dark => {
+                info!("Detected dark system theme");
+                Theme::Dark
+            }
+            dark_light::Mode::Unspecified => {
+                warn!("System theme is not specified");
+                Theme::Dark
+            }
+        }
     }
 
     fn view(&self) -> Element<Message> {

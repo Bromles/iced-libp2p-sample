@@ -7,16 +7,14 @@ use tokio::{io, select};
 use tokio::io::AsyncBufReadExt;
 use tracing::{error, info};
 
-use crate::client::handle_input_line;
-
 #[derive(NetworkBehaviour)]
-struct CustomBehavior {
+struct CustomBehaviour {
     kademlia: kad::Behaviour<MemoryStore>,
     mdns: mdns::tokio::Behaviour,
 }
 
 pub async fn run() {
-    let mut swarm: Swarm<CustomBehavior> = SwarmBuilder::with_new_identity()
+    let mut swarm: Swarm<CustomBehaviour> = SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(
             tcp::Config::default(),
@@ -26,7 +24,7 @@ pub async fn run() {
         .expect("Failed to build tcp config")
         .with_quic()
         .with_behaviour(|key| {
-            Ok(CustomBehavior {
+            Ok(CustomBehaviour {
                 kademlia: kad::Behaviour::new(
                     key.public().to_peer_id(),
                     MemoryStore::new(key.public().to_peer_id()),
@@ -51,26 +49,26 @@ pub async fn run() {
 
     loop {
         select! {
-            Ok(Some(line)) = stdin.next_line() => {
-                handle_input_line(&mut swarm.behaviour_mut().kademlia, line)
-            }
+            // Ok(Some(line)) = stdin.next_line() => {
+            //     handle_input_line(&mut swarm.behaviour_mut().kademlia, line)
+            // }
             event = swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr {address, ..} => {
                     info!("Listening in {address:?}");
                 }
-                SwarmEvent::Behaviour(CustomBehaviorEvent::Mdns(mdns::Event::Discovered(list))) => {
+                SwarmEvent::Behaviour(CustomBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, multiaddr) in list {
                         info!("Discovered peer {peer_id} at {multiaddr}");
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
                     }
                 }
-                SwarmEvent::Behaviour(CustomBehaviorEvent::Mdns(mdns::Event::Expired(list))) => {
+                SwarmEvent::Behaviour(CustomBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
                     for (peer_id, multiaddr) in list {
                         info!("Expired peer {peer_id} at {multiaddr}");
                         swarm.behaviour_mut().kademlia.remove_address(&peer_id, &multiaddr);
                     }
                 }
-                SwarmEvent::Behaviour(CustomBehaviorEvent::Kademlia(kad::Event::OutboundQueryProgressed {result, ..})) => {
+                SwarmEvent::Behaviour(CustomBehaviourEvent::Kademlia(kad::Event::OutboundQueryProgressed {result, ..})) => {
                     match result {
                         kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {key, providers})) => {
                             for peer in providers {
@@ -122,6 +120,91 @@ pub async fn run() {
                 }
                 _ => {}
             }
+        }
+    }
+}
+
+pub enum Message {
+    GetRecord(String),
+    GetProviders(String),
+    PutRecord(String, Vec<u8>),
+    PutProvider(String),
+}
+
+pub fn handle_input_line(kademlia: &mut kad::Behaviour<MemoryStore>, line: String) {
+    let mut args = line.split(' ');
+
+    match args.next() {
+        Some("GET") => {
+            let key = {
+                match args.next() {
+                    Some(key) => kad::RecordKey::new(&key),
+                    None => {
+                        error!("Expected key");
+                        return;
+                    }
+                }
+            };
+            kademlia.get_record(key);
+        }
+        Some("GET_PROVIDERS") => {
+            let key = {
+                match args.next() {
+                    Some(key) => kad::RecordKey::new(&key),
+                    None => {
+                        error!("Expected key");
+                        return;
+                    }
+                }
+            };
+            kademlia.get_providers(key);
+        }
+        Some("PUT") => {
+            let key = {
+                match args.next() {
+                    Some(key) => kad::RecordKey::new(&key),
+                    None => {
+                        error!("Expected key");
+                        return;
+                    }
+                }
+            };
+            let value = {
+                match args.next() {
+                    Some(value) => value.as_bytes().to_vec(),
+                    None => {
+                        error!("Expected value");
+                        return;
+                    }
+                }
+            };
+            let record = kad::Record {
+                key,
+                value,
+                publisher: None,
+                expires: None,
+            };
+            kademlia
+                .put_record(record, kad::Quorum::Majority)
+                .expect("Failed to store record.");
+        }
+        Some("PUT_PROVIDER") => {
+            let key = {
+                match args.next() {
+                    Some(key) => kad::RecordKey::new(&key),
+                    None => {
+                        error!("Expected key");
+                        return;
+                    }
+                }
+            };
+
+            kademlia
+                .start_providing(key)
+                .expect("Failed to start providing key");
+        }
+        _ => {
+            error!("expected GET, GET_PROVIDERS, PUT or PUT_PROVIDER");
         }
     }
 }
