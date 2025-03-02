@@ -1,10 +1,13 @@
+use libp2p::{kad, mdns, noise, Swarm, SwarmBuilder, tcp, yamux};
 use libp2p::futures::StreamExt;
-use libp2p::kad::store::MemoryStore;
 use libp2p::kad::Mode;
+use libp2p::kad::store::MemoryStore;
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
-use libp2p::{kad, mdns, noise, tcp, yamux, Swarm, SwarmBuilder};
-use tokio::io::AsyncBufReadExt;
 use tokio::{io, select};
+use tokio::io::AsyncBufReadExt;
+use tracing::{error, info};
+
+use crate::client::handle_input_line;
 
 #[derive(NetworkBehaviour)]
 struct CustomBehavior {
@@ -20,7 +23,7 @@ pub async fn run() {
             noise::Config::new,
             yamux::Config::default,
         )
-        .expect("")
+        .expect("Failed to build tcp config")
         .with_quic()
         .with_behaviour(|key| {
             Ok(CustomBehavior {
@@ -32,10 +35,10 @@ pub async fn run() {
                     mdns::Config::default(),
                     key.public().to_peer_id(),
                 )
-                .expect(""),
+                    .expect("Failed to set up mDNS behaviour"),
             })
         })
-        .expect("")
+        .expect("Failed to build Swarm")
         .build();
 
     swarm.behaviour_mut().kademlia.set_mode(Some(Mode::Server));
@@ -43,8 +46,8 @@ pub async fn run() {
     let mut stdin = io::BufReader::new(io::stdin()).lines();
 
     swarm
-        .listen_on("/ip4/0.0.0.0/tcp/0".parse().expect(""))
-        .expect("");
+        .listen_on("/ip4/0.0.0.0/tcp/0".parse().expect("Failed to parse multiaddress"))
+        .expect("Failed to start a Swarm");
 
     loop {
         select! {
@@ -53,17 +56,17 @@ pub async fn run() {
             }
             event = swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr {address, ..} => {
-                    println!("Listening in {address:?}");
+                    info!("Listening in {address:?}");
                 }
                 SwarmEvent::Behaviour(CustomBehaviorEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, multiaddr) in list {
-                        println!("Discovered peer {peer_id} at {multiaddr}");
+                        info!("Discovered peer {peer_id} at {multiaddr}");
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
                     }
                 }
                 SwarmEvent::Behaviour(CustomBehaviorEvent::Mdns(mdns::Event::Expired(list))) => {
                     for (peer_id, multiaddr) in list {
-                        println!("Expired peer {peer_id} at {multiaddr}");
+                        info!("Expired peer {peer_id} at {multiaddr}");
                         swarm.behaviour_mut().kademlia.remove_address(&peer_id, &multiaddr);
                     }
                 }
@@ -71,14 +74,14 @@ pub async fn run() {
                     match result {
                         kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {key, providers})) => {
                             for peer in providers {
-                                println!(
+                                info!(
                                     "Peer {peer} provides key {}",
                                     std::str::from_utf8(key.as_ref()).unwrap()
                                 );
                             }
                         }
                         kad::QueryResult::GetProviders(Err(err)) => {
-                            eprintln!("Failed to get providers: {err:?}");
+                            error!("Failed to get providers: {err:?}");
                         }
                         kad::QueryResult::GetRecord(Ok(
                             kad::GetRecordOk::FoundRecord(kad::PeerRecord {
@@ -86,7 +89,7 @@ pub async fn run() {
                                 ..
                             })
                         )) => {
-                            println!(
+                            info!(
                                 "Got record {} : {}",
                                 std::str::from_utf8(key.as_ref()).unwrap(),
                                 std::str::from_utf8(&value).unwrap(),
@@ -94,109 +97,31 @@ pub async fn run() {
                         }
                         kad::QueryResult::GetRecord(Ok(_)) => {}
                         kad::QueryResult::GetRecord(Err(err)) => {
-                            eprintln!("Failed to get record: {err:?}");
+                            error!("Failed to get record: {err:?}");
                         }
                         kad::QueryResult::PutRecord(Ok(kad::PutRecordOk { key })) => {
-                            println!(
+                            info!(
                                 "Successfully put record {}",
                                 std::str::from_utf8(key.as_ref()).unwrap()
                             );
                         }
                         kad::QueryResult::PutRecord(Err(err)) => {
-                            eprintln!("Failed to put record: {err:?}");
+                            info!("Failed to put record: {err:?}");
                         }
                         kad::QueryResult::StartProviding(Ok(kad::AddProviderOk { key })) => {
-                            println!(
+                            info!(
                                 "Successfully put provider record {}",
                                 std::str::from_utf8(key.as_ref()).unwrap()
                             );
                         }
                         kad::QueryResult::StartProviding(Err(err)) => {
-                            eprintln!("Failed to put provider record: {err:?}");
+                            error!("Failed to put provider record: {err:?}");
                         }
                         _ => {}
                     }
                 }
                 _ => {}
             }
-        }
-    }
-}
-
-fn handle_input_line(kademlia: &mut kad::Behaviour<MemoryStore>, line: String) {
-    let mut args = line.split(' ');
-
-    match args.next() {
-        Some("GET") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        eprintln!("Expected key");
-                        return;
-                    }
-                }
-            };
-            kademlia.get_record(key);
-        }
-        Some("GET_PROVIDERS") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        eprintln!("Expected key");
-                        return;
-                    }
-                }
-            };
-            kademlia.get_providers(key);
-        }
-        Some("PUT") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        eprintln!("Expected key");
-                        return;
-                    }
-                }
-            };
-            let value = {
-                match args.next() {
-                    Some(value) => value.as_bytes().to_vec(),
-                    None => {
-                        eprintln!("Expected value");
-                        return;
-                    }
-                }
-            };
-            let record = kad::Record {
-                key,
-                value,
-                publisher: None,
-                expires: None,
-            };
-            kademlia
-                .put_record(record, kad::Quorum::Majority)
-                .expect("Failed to store record.");
-        }
-        Some("PUT_PROVIDER") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        eprintln!("Expected key");
-                        return;
-                    }
-                }
-            };
-
-            kademlia
-                .start_providing(key)
-                .expect("Failed to start providing key");
-        }
-        _ => {
-            eprintln!("expected GET, GET_PROVIDERS, PUT or PUT_PROVIDER");
         }
     }
 }

@@ -3,9 +3,10 @@ use std::sync::LazyLock;
 use iced::{Center, color, Element, Fill, Subscription, Task, Theme};
 use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
 use iced::window::Position;
-use tracing::Level;
+use tracing::{info, Level};
 
 mod server;
+mod client;
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt()
@@ -67,17 +68,17 @@ impl P2pApp {
                 State::Connected(connection) => {
                     self.new_message.clear();
 
-                    println!("Connected {connection} with message {message}");
+                    info!("Connected {connection} with message {message}");
 
                     Task::none()
                 }
                 State::Disconnected => Task::none(),
             },
             Message::Echo(event) => {
-                println!("Echo {event}");
-                
+                info!("Echo {event}");
+
                 Task::none()
-            },
+            }
             /*Message::Echo(event) => match event {
                 echo::Event::Connected(connection) => {
                     self.state = State::Connected(connection);
@@ -107,7 +108,7 @@ impl P2pApp {
         Subscription::none()
         //Subscription::run(echo::connect).map(Message::Echo)
     }
-    
+
     fn theme(&self) -> Theme {
         Theme::Dark
     }
