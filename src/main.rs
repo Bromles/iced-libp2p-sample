@@ -9,7 +9,7 @@ use iced::futures::lock::Mutex;
 use iced::futures::stream::BoxStream;
 use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
 use iced::window::Position;
-use tracing::{info, Level, warn};
+use tracing::{debug, info, Level, warn};
 
 use crate::p2p::{P2pCommand, P2pEvent};
 
@@ -33,14 +33,22 @@ static MESSAGE_LOG: LazyLock<scrollable::Id> = LazyLock::new(scrollable::Id::uni
 struct App {
     p2p_control: mpsc::Sender<P2pCommand>,
     p2p_events: Arc<Mutex<mpsc::Receiver<P2pEvent>>>,
+    state: State,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     P2pEvent(P2pEvent),
+    CurrentMessageChanged(String),
     UserInput(String),
     ServerStarted,
     Ignore,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    messages: Vec<P2pEvent>,
+    current_message: String,
 }
 
 impl App {
@@ -52,6 +60,7 @@ impl App {
             Self {
                 p2p_control: command_sender,
                 p2p_events: Arc::new(Mutex::new(event_receiver)),
+                state: State::default(),
             },
             Task::batch([
                 Task::perform(p2p::run(command_receiver, event_sender), |_| Message::ServerStarted),
@@ -62,25 +71,26 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::P2pEvent(event) => handle_p2p_event(event),
-            Message::UserInput(data) => handle_user_input(data, self.p2p_control.clone()),
+            Message::P2pEvent(event) => handle_p2p_event(&mut self.state, event),
+            Message::CurrentMessageChanged(data) => handle_new_message(&mut self.state, data),
+            Message::UserInput(data) => handle_user_input(&mut self.state, data, self.p2p_control.clone()),
             Message::ServerStarted => Task::none(),
             Message::Ignore => Task::none(),
         }
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        from_recipe(SwarmSub(self.p2p_events.clone()))
+        from_recipe(P2pSub(self.p2p_events.clone()))
     }
 
     fn theme(&self) -> Theme {
         match dark_light::detect().expect("Failed to detect system theme") {
             dark_light::Mode::Light => {
-                info!("Detected light system theme");
+                debug!("Detected light system theme");
                 Theme::Light
             }
             dark_light::Mode::Dark => {
-                info!("Detected dark system theme");
+                debug!("Detected dark system theme");
                 Theme::Dark
             }
             dark_light::Mode::Unspecified => {
@@ -91,30 +101,41 @@ impl App {
     }
 
     fn view(&self) -> Element<Message> {
-        let message_log: Element<_> = if self.messages.is_empty() {
-            center(text("Your messages will appear here...").color(color!(0x888888))).into()
+        let message_log: Element<_> = if self.state.messages.is_empty() {
+            center(
+                text("Your messages will appear here...")
+                    .color(color!(0x888888))
+            ).into()
         } else {
-            scrollable(column(self.messages.iter().map(text).map(Element::from)).spacing(10))
+            let messages_elements = self.state.messages.iter()
+                .map(|m| format!("{m}"))
+                .map(text)
+                .map(Element::from);
+
+            scrollable(
+                column(messages_elements)
+                    .spacing(10)
+            )
                 .id(MESSAGE_LOG.clone())
                 .height(Fill)
                 .into()
         };
 
         let new_message_input = {
-            let mut input = text_input("Type a message...", &self.new_message)
-                .on_input(Message::NewMessageChanged)
+            let mut input = text_input("Type a message...", &self.state.current_message)
+                .on_input(Message::CurrentMessageChanged)
                 .padding(10);
 
             let mut button = button(text("Send").height(40).align_y(Center)).padding([0, 20]);
 
-            if matches!(self.state, State::Connected(_)) {
-                // if let Some(message) = echo::Message::new(&self.new_message) {
-                //     input = input.on_submit(Message::Send(message.clone()));
-                //     button = button.on_press(Message::Send(message));
-                // }
+            if !self.state.current_message.is_empty() {
+                input = input.on_submit(Message::UserInput(self.state.current_message.clone()));
+                button = button.on_press(Message::UserInput(self.state.current_message.clone()));
             }
 
-            row![input, button].spacing(10).align_y(Center)
+            row![input, button]
+                .spacing(10)
+                .align_y(Center)
         };
 
         column![message_log, new_message_input]
@@ -125,9 +146,9 @@ impl App {
     }
 }
 
-struct SwarmSub(Arc<Mutex<mpsc::Receiver<P2pEvent>>>);
+struct P2pSub(Arc<Mutex<mpsc::Receiver<P2pEvent>>>);
 
-impl Recipe for SwarmSub {
+impl Recipe for P2pSub {
     type Output = Message;
 
     fn hash(&self, state: &mut Hasher) {
@@ -145,13 +166,23 @@ impl Recipe for SwarmSub {
     }
 }
 
-fn handle_p2p_event(event: P2pEvent) -> Task<Message> {
-    Task::none()
-} 
+fn handle_p2p_event(state: &mut State, event: P2pEvent) -> Task<Message> {
+    state.messages.push(event);
 
-fn handle_user_input(data: String, mut sender: mpsc::Sender<P2pCommand>) -> Task<Message> {
+    Task::none()
+}
+
+fn handle_new_message(state: &mut State, data: String) -> Task<Message> {
+    state.current_message = data.clone();
+
+    Task::none()
+}
+
+fn handle_user_input(state: &mut State, data: String, mut sender: mpsc::Sender<P2pCommand>) -> Task<Message> {
+    state.current_message = data.clone();
+
     let cmd = P2pCommand::PutRecord(data.clone(), data.into_bytes());
-    
+
     Task::perform(async move {
         sender.send(cmd).await.ok()
     }, |_| Message::Ignore)

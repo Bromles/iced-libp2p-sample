@@ -1,3 +1,5 @@
+use std::fmt;
+use std::fmt::Formatter;
 use iced::futures::{select, SinkExt};
 use iced::futures::channel::mpsc;
 use libp2p::{kad, mdns, Multiaddr, noise, PeerId, Swarm, SwarmBuilder, tcp, yamux};
@@ -23,6 +25,19 @@ pub enum P2pEvent {
     RecordFound(kad::RecordKey, Vec<u8>),
     ProvidersFound(kad::RecordKey, Vec<PeerId>),
     Error(String),
+}
+
+impl fmt::Display for P2pEvent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            P2pEvent::Bootstrapped(address) => write!(f, "Listen on {address}"),
+            P2pEvent::PeerDiscovered(peer_id, address) => write!(f, "Discovered peer {peer_id} at {address}"),
+            P2pEvent::PeerExpired(peer_id, address) => write!(f, "Expired peer {peer_id} at {address}"),
+            P2pEvent::RecordFound(key, value) => write!(f, "Found record value for {key:?}: {}", String::from_utf8(value.clone()).unwrap()),
+            P2pEvent::ProvidersFound(key, peer_ids) => write!(f, "Found providers for {key:?}: {peer_ids:?}"),
+            P2pEvent::Error(msg) => write!(f, "Something went wrong: {msg}"),
+        }
+    }
 }
 
 #[derive(NetworkBehaviour)]
@@ -106,7 +121,7 @@ async fn handle_command(cmd: P2pCommand, swarm: &mut Swarm<CustomBehaviour>) {
 async fn handle_swarm_event(event: SwarmEvent<CustomBehaviourEvent>, swarm: &mut Swarm<CustomBehaviour>, sender: &mut mpsc::Sender<P2pEvent>) {
     match event {
         SwarmEvent::NewListenAddr { address, .. } => {
-            info!("Listening in {address:?}");
+            info!("Listening on {address:?}");
             sender.send(P2pEvent::Bootstrapped(address)).await.expect("Failed to send");
         }
         SwarmEvent::Behaviour(CustomBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
