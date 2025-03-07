@@ -3,10 +3,10 @@ use std::sync::{Arc, LazyLock};
 
 use iced::{Center, color, Element, Fill, Subscription, Task, Theme};
 use iced::advanced::subscription::{EventStream, from_recipe, Hasher, Recipe};
+use iced::futures::{SinkExt, StreamExt};
 use iced::futures::channel::mpsc;
 use iced::futures::lock::Mutex;
 use iced::futures::stream::BoxStream;
-use iced::futures::StreamExt;
 use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
 use iced::window::Position;
 use tracing::{info, Level, warn};
@@ -40,6 +40,7 @@ enum Message {
     P2pEvent(P2pEvent),
     UserInput(String),
     ServerStarted,
+    Ignore,
 }
 
 impl App {
@@ -61,48 +62,10 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::NewMessageChanged(new_message) => {
-                self.new_message = new_message;
-
-                Task::none()
-            }
-            Message::Send(message) => match &mut self.state {
-                State::Connected(connection) => {
-                    self.new_message.clear();
-
-                    info!("Connected {connection} with message {message}");
-
-                    Task::none()
-                }
-                State::Disconnected => Task::none(),
-            },
-            Message::Echo(event) => {
-                info!("Echo {event}");
-
-                Task::none()
-            }
-            /*Message::Echo(event) => match event {
-                echo::Event::Connected(connection) => {
-                    self.state = State::Connected(connection);
-                
-                    self.messages.push(echo::Message::connected());
-                
-                    Task::none()
-                }
-                echo::Event::Disconnected => {
-                    self.state = State::Disconnected;
-                
-                    self.messages.push(echo::Message::disconnected());
-                
-                    Task::none()
-                }
-                echo::Event::MessageReceived(message) => {
-                    self.messages.push(message);
-                
-                    scrollable::snap_to(MESSAGE_LOG.clone(), scrollable::RelativeOffset::END)
-                }
-            },*/
-            Message::Server => Task::none(),
+            Message::P2pEvent(event) => handle_p2p_event(event),
+            Message::UserInput(data) => handle_user_input(data, self.p2p_control.clone()),
+            Message::ServerStarted => Task::none(),
+            Message::Ignore => Task::none(),
         }
     }
 
@@ -180,4 +143,16 @@ impl Recipe for SwarmSub {
                     }
                 })
     }
+}
+
+fn handle_p2p_event(event: P2pEvent) -> Task<Message> {
+    Task::none()
+} 
+
+fn handle_user_input(data: String, mut sender: mpsc::Sender<P2pCommand>) -> Task<Message> {
+    let cmd = P2pCommand::PutRecord(data.clone(), data.into_bytes());
+    
+    Task::perform(async move {
+        sender.send(cmd).await.ok()
+    }, |_| Message::Ignore)
 }
