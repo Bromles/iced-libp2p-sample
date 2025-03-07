@@ -41,7 +41,7 @@ pub async fn run() {
 
     swarm.behaviour_mut().kademlia.set_mode(Some(Mode::Server));
 
-    let mut stdin = io::BufReader::new(io::stdin()).lines();
+    //let mut stdin = io::BufReader::new(io::stdin()).lines();
 
     swarm
         .listen_on("/ip4/0.0.0.0/tcp/0".parse().expect("Failed to parse multiaddress"))
