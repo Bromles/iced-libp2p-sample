@@ -10,7 +10,7 @@ strip = true
 opt-level = 3
 
 [dependencies]
-tokio = { version = "1.43", features = ["time", "sync"] }
+tokio = { version = "1.43", features = ["time"] }
 iced = { version = "0.13", features = ["tokio", "advanced"] }
 libp2p = { version = "0.55", features = ["tokio", "dns", "kad", "mdns", "noise", "macros", "tcp", "quic", "yamux"] }
 tracing-subscriber = { version = "0.3" }

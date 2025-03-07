@@ -1,6 +1,12 @@
 use std::sync::{Arc, LazyLock};
 
 use iced::{Center, color, Element, Fill, Subscription, Task, Theme};
+use iced::advanced::graphics::futures::{boxed_stream, BoxStream};
+use iced::advanced::subscription;
+use iced::advanced::subscription::{EventStream, Hasher};
+use iced::futures::channel::mpsc;
+use iced::futures::lock::Mutex;
+use iced::futures::StreamExt;
 use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
 use iced::window::Position;
 use tracing::{info, Level, warn};
@@ -23,34 +29,45 @@ fn main() -> iced::Result {
 static MESSAGE_LOG: LazyLock<scrollable::Id> = LazyLock::new(scrollable::Id::unique);
 
 struct P2pApp {
-    messages: Vec<String>,
-    new_message: String,
-    state: State,
+    swarm_control: mpsc::Sender<SwarmCommand>,
+    swarm_events: mpsc::Receiver<SwarmEvent>,
+}
+
+#[derive(Debug, Clone)]
+enum SwarmCommand {
+    Bootstrap,
+    GetRecord(String),
+    GetProviders(String),
+    PutRecord(String, Vec<u8>),
+    PutProvider(String),
+}
+
+#[derive(Debug, Clone)]
+enum SwarmEvent {
+    Bootstrapped,
+    RecordFound(Vec<u8>),
+    Error(String)
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    NewMessageChanged(String),
-    Send(String),
-    Echo(String),
-    Server,
-}
-
-enum State {
-    Disconnected,
-    Connected(String),
+    SwarmEvent(SwarmEvent),
+    UserInput(String),
+    ServerStarted
 }
 
 impl P2pApp {
     fn new() -> (Self, Task<Message>) {
+        let (command_sender, command_receiver) = mpsc::channel(100);
+        let (event_sender, event_receiver) = mpsc::channel(100);
+        
         (
             Self {
-                messages: Vec::new(),
-                new_message: String::new(),
-                state: State::Disconnected,
+                swarm_control: command_sender,
+                swarm_events: event_receiver
             },
             Task::batch([
-                Task::perform(p2p::run(), |_| Message::Server),
+                Task::perform(p2p::run(command_receiver, event_sender), |_| Message::ServerStarted),
                 widget::focus_next(),
             ]),
         )
@@ -104,6 +121,28 @@ impl P2pApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        struct SwarmSub(Arc<Mutex<mpsc::Receiver<SwarmEvent>>>);
+        
+        impl subscription::Recipe for SwarmSub {
+            type Output = Message;
+
+            fn hash(&self, state: &mut Hasher) {
+                todo!()
+            }
+
+            fn stream(self: Box<Self>, input: EventStream) -> BoxStream<Self::Output> {
+                let receiver = self.0.clone();
+                
+                let mut recv = receiver.lock().await;
+                
+                while let Some(event) = recv.next().await {
+                    Message::SwarmEvent(event);
+                }
+            }
+        }
+        
+        Subscription::from_recipe(SwarmSub(self.swarm_events.close()));
+        
         Subscription::none()
         //Subscription::run(echo::connect).map(Message::Echo)
     }
