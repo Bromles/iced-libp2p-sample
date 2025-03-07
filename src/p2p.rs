@@ -1,12 +1,29 @@
-use iced::futures::channel::mpsc;
 use iced::futures::{select, SinkExt};
-use libp2p::{kad, mdns, noise, Swarm, SwarmBuilder, tcp, yamux};
+use iced::futures::channel::mpsc;
+use libp2p::{kad, mdns, Multiaddr, noise, PeerId, Swarm, SwarmBuilder, tcp, yamux};
 use libp2p::futures::StreamExt;
 use libp2p::kad::Mode;
 use libp2p::kad::store::MemoryStore;
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use tracing::{error, info};
-use crate::SwarmCommand;
+
+#[derive(Debug, Clone)]
+pub enum P2pCommand {
+    GetRecord(String),
+    GetProviders(String),
+    PutRecord(String, Vec<u8>),
+    PutProvider(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum P2pEvent {
+    Bootstrapped(Multiaddr),
+    PeerDiscovered(PeerId, Multiaddr),
+    PeerExpired(PeerId, Multiaddr),
+    RecordFound(kad::RecordKey, Vec<u8>),
+    ProvidersFound(kad::RecordKey, Vec<PeerId>),
+    Error(String),
+}
 
 #[derive(NetworkBehaviour)]
 struct CustomBehaviour {
@@ -14,7 +31,7 @@ struct CustomBehaviour {
     mdns: mdns::tokio::Behaviour,
 }
 
-pub async fn run(mut commands: mpsc::Receiver<SwarmCommand>, mut events: mpsc::Sender<crate::SwarmEvent>) {
+pub async fn run(mut commands: mpsc::Receiver<P2pCommand>, mut events: mpsc::Sender<P2pEvent>) {
     let mut swarm: Swarm<CustomBehaviour> = SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(
@@ -49,44 +66,78 @@ pub async fn run(mut commands: mpsc::Receiver<SwarmCommand>, mut events: mpsc::S
     loop {
         select! {
             cmd = commands.select_next_some() => handle_command(cmd, &mut swarm).await,
-            event = swarm.select_next_some() => handle_swarm_event(event, &mut swarm, &mut events).await
+            event = swarm.select_next_some() => handle_swarm_event(event, &mut swarm, &mut events).await,
         }
     }
 }
 
-async fn handle_command(cmd: SwarmCommand, swarm: &mut Swarm<CustomBehaviour>) {
-    
+async fn handle_command(cmd: P2pCommand, swarm: &mut Swarm<CustomBehaviour>) {
+    match cmd {
+        P2pCommand::GetRecord(key) => {
+            let key = kad::RecordKey::new(&key);
+            swarm.behaviour_mut().kademlia.get_record(key);
+        }
+        P2pCommand::GetProviders(key) => {
+            let key = kad::RecordKey::new(&key);
+            swarm.behaviour_mut().kademlia.get_providers(key);
+        }
+        P2pCommand::PutRecord(key, value) => {
+            let key = kad::RecordKey::new(&key);
+            let record = kad::Record {
+                key,
+                value,
+                publisher: None,
+                expires: None,
+            };
+
+            swarm.behaviour_mut().kademlia
+                .put_record(record, kad::Quorum::Majority)
+                .expect("Failed to store record");
+        }
+        P2pCommand::PutProvider(key) => {
+            let key = kad::RecordKey::new(&key);
+            swarm.behaviour_mut().kademlia
+                .start_providing(key)
+                .expect("Failed to start providing key");
+        }
+    }
 }
 
-async fn handle_swarm_event(event: SwarmEvent<CustomBehaviourEvent>, swarm: &mut Swarm<CustomBehaviour>,  sender: &mut mpsc::Sender<crate::SwarmEvent>) {
+async fn handle_swarm_event(event: SwarmEvent<CustomBehaviourEvent>, swarm: &mut Swarm<CustomBehaviour>, sender: &mut mpsc::Sender<P2pEvent>) {
     match event {
-        SwarmEvent::NewListenAddr {address, ..} => {
+        SwarmEvent::NewListenAddr { address, .. } => {
             info!("Listening in {address:?}");
+            sender.send(P2pEvent::Bootstrapped(address)).await.expect("Failed to send");
         }
         SwarmEvent::Behaviour(CustomBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
             for (peer_id, multiaddr) in list {
                 info!("Discovered peer {peer_id} at {multiaddr}");
-                swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr);
+                swarm.behaviour_mut().kademlia.add_address(&peer_id, multiaddr.clone());
+                sender.send(P2pEvent::PeerDiscovered(peer_id, multiaddr)).await.expect("Failed to send");
             }
         }
         SwarmEvent::Behaviour(CustomBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
             for (peer_id, multiaddr) in list {
                 info!("Expired peer {peer_id} at {multiaddr}");
                 swarm.behaviour_mut().kademlia.remove_address(&peer_id, &multiaddr);
+                sender.send(P2pEvent::PeerDiscovered(peer_id, multiaddr)).await.expect("Failed to send");
             }
         }
-        SwarmEvent::Behaviour(CustomBehaviourEvent::Kademlia(kad::Event::OutboundQueryProgressed {result, ..})) => {
+        SwarmEvent::Behaviour(CustomBehaviourEvent::Kademlia(kad::Event::OutboundQueryProgressed { result, .. })) => {
             match result {
-                kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {key, providers})) => {
-                    for peer in providers {
+                kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders { key, providers })) => {
+                    for peer in &providers {
                         info!(
                                     "Peer {peer} provides key {}",
                                     std::str::from_utf8(key.as_ref()).unwrap()
                                 );
                     }
+
+                    sender.send(P2pEvent::ProvidersFound(key, providers.into_iter().collect())).await.expect("Failed to send");
                 }
                 kad::QueryResult::GetProviders(Err(err)) => {
                     error!("Failed to get providers: {err:?}");
+                    sender.send(P2pEvent::Error(format!("{:?}", err))).await.expect("Failed to send");
                 }
                 kad::QueryResult::GetRecord(Ok(
                                                 kad::GetRecordOk::FoundRecord(kad::PeerRecord {
@@ -99,10 +150,13 @@ async fn handle_swarm_event(event: SwarmEvent<CustomBehaviourEvent>, swarm: &mut
                                 std::str::from_utf8(key.as_ref()).unwrap(),
                                 std::str::from_utf8(&value).unwrap(),
                             );
+
+                    sender.send(P2pEvent::RecordFound(key, value)).await.expect("Failed to send");
                 }
                 kad::QueryResult::GetRecord(Ok(_)) => {}
                 kad::QueryResult::GetRecord(Err(err)) => {
                     error!("Failed to get record: {err:?}");
+                    sender.send(P2pEvent::Error(format!("{:?}", err))).await.expect("Failed to send");
                 }
                 kad::QueryResult::PutRecord(Ok(kad::PutRecordOk { key })) => {
                     info!(
@@ -112,6 +166,7 @@ async fn handle_swarm_event(event: SwarmEvent<CustomBehaviourEvent>, swarm: &mut
                 }
                 kad::QueryResult::PutRecord(Err(err)) => {
                     info!("Failed to put record: {err:?}");
+                    sender.send(P2pEvent::Error(format!("{:?}", err))).await.expect("Failed to send");
                 }
                 kad::QueryResult::StartProviding(Ok(kad::AddProviderOk { key })) => {
                     info!(
@@ -121,90 +176,11 @@ async fn handle_swarm_event(event: SwarmEvent<CustomBehaviourEvent>, swarm: &mut
                 }
                 kad::QueryResult::StartProviding(Err(err)) => {
                     error!("Failed to put provider record: {err:?}");
+                    sender.send(P2pEvent::Error(format!("{:?}", err))).await.expect("Failed to send");
                 }
                 _ => {}
             }
         }
         _ => {}
-    }
-    
-    let _ = sender.send(event).await;
-}
-
-pub fn handle_input_line(kademlia: &mut kad::Behaviour<MemoryStore>, line: String) {
-    let mut args = line.split(' ');
-
-    match args.next() {
-        Some("GET") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        error!("Expected key");
-                        return;
-                    }
-                }
-            };
-            kademlia.get_record(key);
-        }
-        Some("GET_PROVIDERS") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        error!("Expected key");
-                        return;
-                    }
-                }
-            };
-            kademlia.get_providers(key);
-        }
-        Some("PUT") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        error!("Expected key");
-                        return;
-                    }
-                }
-            };
-            let value = {
-                match args.next() {
-                    Some(value) => value.as_bytes().to_vec(),
-                    None => {
-                        error!("Expected value");
-                        return;
-                    }
-                }
-            };
-            let record = kad::Record {
-                key,
-                value,
-                publisher: None,
-                expires: None,
-            };
-            kademlia
-                .put_record(record, kad::Quorum::Majority)
-                .expect("Failed to store record.");
-        }
-        Some("PUT_PROVIDER") => {
-            let key = {
-                match args.next() {
-                    Some(key) => kad::RecordKey::new(&key),
-                    None => {
-                        error!("Expected key");
-                        return;
-                    }
-                }
-            };
-
-            kademlia
-                .start_providing(key)
-                .expect("Failed to start providing key");
-        }
-        _ => {
-            error!("expected GET, GET_PROVIDERS, PUT or PUT_PROVIDER");
-        }
     }
 }

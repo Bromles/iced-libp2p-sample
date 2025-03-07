@@ -1,15 +1,17 @@
+use std::hash::Hash;
 use std::sync::{Arc, LazyLock};
 
 use iced::{Center, color, Element, Fill, Subscription, Task, Theme};
-use iced::advanced::graphics::futures::{boxed_stream, BoxStream};
-use iced::advanced::subscription;
-use iced::advanced::subscription::{EventStream, Hasher};
+use iced::advanced::subscription::{EventStream, from_recipe, Hasher, Recipe};
 use iced::futures::channel::mpsc;
 use iced::futures::lock::Mutex;
+use iced::futures::stream::BoxStream;
 use iced::futures::StreamExt;
 use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
 use iced::window::Position;
 use tracing::{info, Level, warn};
+
+use crate::p2p::{P2pCommand, P2pEvent};
 
 mod p2p;
 
@@ -19,52 +21,36 @@ fn main() -> iced::Result {
         .try_init()
         .expect("Failed to set up logger");
 
-    iced::application("P2P Iced", P2pApp::update, P2pApp::view)
-        .subscription(P2pApp::subscription)
-        .theme(P2pApp::theme)
+    iced::application("P2P Iced", App::update, App::view)
+        .subscription(App::subscription)
+        .theme(App::theme)
         .position(Position::Centered)
-        .run_with(P2pApp::new)
+        .run_with(App::new)
 }
 
 static MESSAGE_LOG: LazyLock<scrollable::Id> = LazyLock::new(scrollable::Id::unique);
 
-struct P2pApp {
-    swarm_control: mpsc::Sender<SwarmCommand>,
-    swarm_events: mpsc::Receiver<SwarmEvent>,
-}
-
-#[derive(Debug, Clone)]
-enum SwarmCommand {
-    Bootstrap,
-    GetRecord(String),
-    GetProviders(String),
-    PutRecord(String, Vec<u8>),
-    PutProvider(String),
-}
-
-#[derive(Debug, Clone)]
-enum SwarmEvent {
-    Bootstrapped,
-    RecordFound(Vec<u8>),
-    Error(String)
+struct App {
+    p2p_control: mpsc::Sender<P2pCommand>,
+    p2p_events: Arc<Mutex<mpsc::Receiver<P2pEvent>>>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    SwarmEvent(SwarmEvent),
+    P2pEvent(P2pEvent),
     UserInput(String),
-    ServerStarted
+    ServerStarted,
 }
 
-impl P2pApp {
+impl App {
     fn new() -> (Self, Task<Message>) {
         let (command_sender, command_receiver) = mpsc::channel(100);
         let (event_sender, event_receiver) = mpsc::channel(100);
-        
+
         (
             Self {
-                swarm_control: command_sender,
-                swarm_events: event_receiver
+                p2p_control: command_sender,
+                p2p_events: Arc::new(Mutex::new(event_receiver)),
             },
             Task::batch([
                 Task::perform(p2p::run(command_receiver, event_sender), |_| Message::ServerStarted),
@@ -121,30 +107,7 @@ impl P2pApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        struct SwarmSub(Arc<Mutex<mpsc::Receiver<SwarmEvent>>>);
-        
-        impl subscription::Recipe for SwarmSub {
-            type Output = Message;
-
-            fn hash(&self, state: &mut Hasher) {
-                todo!()
-            }
-
-            fn stream(self: Box<Self>, input: EventStream) -> BoxStream<Self::Output> {
-                let receiver = self.0.clone();
-                
-                let mut recv = receiver.lock().await;
-                
-                while let Some(event) = recv.next().await {
-                    Message::SwarmEvent(event);
-                }
-            }
-        }
-        
-        Subscription::from_recipe(SwarmSub(self.swarm_events.close()));
-        
-        Subscription::none()
-        //Subscription::run(echo::connect).map(Message::Echo)
+        from_recipe(SwarmSub(self.p2p_events.clone()))
     }
 
     fn theme(&self) -> Theme {
@@ -196,5 +159,25 @@ impl P2pApp {
             .padding(20)
             .spacing(10)
             .into()
+    }
+}
+
+struct SwarmSub(Arc<Mutex<mpsc::Receiver<P2pEvent>>>);
+
+impl Recipe for SwarmSub {
+    type Output = Message;
+
+    fn hash(&self, state: &mut Hasher) {
+        std::any::TypeId::of::<Self>().hash(state)
+    }
+
+    fn stream(self: Box<Self>, _: EventStream) -> BoxStream<'static, Self::Output> {
+        Box::pin(async_stream::stream! {
+                    let mut receiver = self.0.lock().await;
+                    
+                    while let Some(event) = receiver.next().await {
+                        yield Message::P2pEvent(event)
+                    }
+                })
     }
 }

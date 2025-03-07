@@ -16,3 +16,4 @@ libp2p = { version = "0.55", features = ["tokio", "dns", "kad", "mdns", "noise",
 tracing-subscriber = { version = "0.3" }
 tracing = "0.1"
 dark-light = "2.0.0"
+async-stream = "0.3"
