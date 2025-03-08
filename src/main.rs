@@ -1,3 +1,6 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![forbid(unsafe_code)]
+
 use std::hash::Hash;
 use std::sync::{Arc, LazyLock};
 
