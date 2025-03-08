@@ -126,7 +126,7 @@ impl App {
     }
 }
 
-fn message_log<'a>(messages: &[P2pEvent]) -> Element<'a, Message> {
+fn message_log(messages: &[P2pEvent]) -> Element<'_, Message> {
     if messages.is_empty() {
         center(text("Your messages will appear here...").color(color!(0x888888))).into()
     } else {
@@ -143,7 +143,7 @@ fn message_log<'a>(messages: &[P2pEvent]) -> Element<'a, Message> {
     }
 }
 
-fn new_message_input<'a>(current_message: &String) -> Element<'a, Message> {
+fn new_message_input(current_message: &str) -> Element<'_, Message> {
     let mut input = text_input("Type a message...", current_message)
         .on_input(Message::CurrentMessageChanged)
         .padding(10);
@@ -151,8 +151,8 @@ fn new_message_input<'a>(current_message: &String) -> Element<'a, Message> {
     let mut button = button(text("Send").height(40).align_y(Center)).padding([0, 20]);
 
     if !current_message.is_empty() {
-        input = input.on_submit(Message::UserInput(current_message.clone()));
-        button = button.on_press(Message::UserInput(current_message.clone()));
+        input = input.on_submit(Message::UserInput(current_message.to_owned()));
+        button = button.on_press(Message::UserInput(current_message.to_owned()));
     }
 
     row![input, button].spacing(10).align_y(Center).into()
