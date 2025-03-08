@@ -1,23 +1,30 @@
 use std::hash::Hash;
 use std::sync::{Arc, LazyLock};
 
-use iced::{Center, color, Element, Fill, Subscription, Task, Theme};
-use iced::advanced::subscription::{EventStream, from_recipe, Hasher, Recipe};
-use iced::futures::{SinkExt, StreamExt};
+use iced::advanced::subscription::{EventStream, Hasher, Recipe, from_recipe};
 use iced::futures::channel::mpsc;
 use iced::futures::lock::Mutex;
 use iced::futures::stream::BoxStream;
+use iced::futures::{SinkExt, StreamExt};
 use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
 use iced::window::Position;
-use tracing::{debug, info, Level, warn};
+use iced::{Center, Element, Fill, Subscription, Task, Theme, color};
+use tracing::{Level, info, trace, warn};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::p2p::{P2pCommand, P2pEvent};
 
 mod p2p;
 
 fn main() -> iced::Result {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "p2p_application_development_Bromles=debug,wgpu_core=info".into()
+            }),
+        )
+        .with(tracing_subscriber::fmt::layer())
         .try_init()
         .expect("Failed to set up logger");
 
@@ -63,7 +70,9 @@ impl App {
                 state: State::default(),
             },
             Task::batch([
-                Task::perform(p2p::run(command_receiver, event_sender), |_| Message::ServerStarted),
+                Task::perform(p2p::run(command_receiver, event_sender), |_| {
+                    Message::ServerStarted
+                }),
                 widget::focus_next(),
             ]),
         )
@@ -73,7 +82,9 @@ impl App {
         match message {
             Message::P2pEvent(event) => handle_p2p_event(&mut self.state, event),
             Message::CurrentMessageChanged(data) => handle_new_message(&mut self.state, data),
-            Message::UserInput(data) => handle_user_input(&mut self.state, data, self.p2p_control.clone()),
+            Message::UserInput(data) => {
+                handle_user_input(&mut self.state, data, self.p2p_control.clone())
+            }
             Message::ServerStarted => Task::none(),
             Message::Ignore => Task::none(),
         }
@@ -86,11 +97,11 @@ impl App {
     fn theme(&self) -> Theme {
         match dark_light::detect().expect("Failed to detect system theme") {
             dark_light::Mode::Light => {
-                debug!("Detected light system theme");
+                trace!("Detected light system theme");
                 Theme::Light
             }
             dark_light::Mode::Dark => {
-                debug!("Detected dark system theme");
+                trace!("Detected dark system theme");
                 Theme::Dark
             }
             dark_light::Mode::Unspecified => {
@@ -102,20 +113,17 @@ impl App {
 
     fn view(&self) -> Element<Message> {
         let message_log: Element<_> = if self.state.messages.is_empty() {
-            center(
-                text("Your messages will appear here...")
-                    .color(color!(0x888888))
-            ).into()
+            center(text("Your messages will appear here...").color(color!(0x888888))).into()
         } else {
-            let messages_elements = self.state.messages.iter()
+            let messages_elements = self
+                .state
+                .messages
+                .iter()
                 .map(|m| format!("{m}"))
                 .map(text)
                 .map(Element::from);
 
-            scrollable(
-                column(messages_elements)
-                    .spacing(10)
-            )
+            scrollable(column(messages_elements).spacing(10))
                 .id(MESSAGE_LOG.clone())
                 .height(Fill)
                 .into()
@@ -133,9 +141,7 @@ impl App {
                 button = button.on_press(Message::UserInput(self.state.current_message.clone()));
             }
 
-            row![input, button]
-                .spacing(10)
-                .align_y(Center)
+            row![input, button].spacing(10).align_y(Center)
         };
 
         column![message_log, new_message_input]
@@ -157,12 +163,12 @@ impl Recipe for P2pSub {
 
     fn stream(self: Box<Self>, _: EventStream) -> BoxStream<'static, Self::Output> {
         Box::pin(async_stream::stream! {
-                    let mut receiver = self.0.lock().await;
-                    
-                    while let Some(event) = receiver.next().await {
-                        yield Message::P2pEvent(event)
-                    }
-                })
+            let mut receiver = self.0.lock().await;
+
+            while let Some(event) = receiver.next().await {
+                yield Message::P2pEvent(event)
+            }
+        })
     }
 }
 
@@ -178,12 +184,16 @@ fn handle_new_message(state: &mut State, data: String) -> Task<Message> {
     Task::none()
 }
 
-fn handle_user_input(state: &mut State, data: String, mut sender: mpsc::Sender<P2pCommand>) -> Task<Message> {
-    state.current_message = data.clone();
+fn handle_user_input(
+    state: &mut State,
+    data: String,
+    mut sender: mpsc::Sender<P2pCommand>,
+) -> Task<Message> {
+    state.current_message = "".to_owned();
 
     let cmd = P2pCommand::PutRecord(data.clone(), data.into_bytes());
 
-    Task::perform(async move {
-        sender.send(cmd).await.ok()
-    }, |_| Message::Ignore)
+    Task::perform(async move { sender.send(cmd).await.ok() }, |_| {
+        Message::Ignore
+    })
 }
