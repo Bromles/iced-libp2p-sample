@@ -56,26 +56,26 @@ impl fmt::Display for P2pEvent {
             P2pEvent::Outbound(event) => match event {
                 P2pOutboundEvent::RecordFound(key, value) => write!(
                     f,
-                    "Found record value for {key:?}: {}",
+                    "Outbound: Found record value for {key:?}: {}",
                     String::from_utf8(value.clone()).unwrap()
                 ),
                 P2pOutboundEvent::ProvidersFound(key, peer_ids) => {
-                    write!(f, "Found providers for {key:?}: {peer_ids:?}")
+                    write!(f, "Outbound: Found providers for {key:?}: {peer_ids:?}")
                 }
                 P2pOutboundEvent::RecordPut(key) => {
-                    write!(f, "Successfully put record with {key:?}")
+                    write!(f, "Outbound: Successfully put record with {key:?}")
                 }
                 P2pOutboundEvent::ProviderPut(key) => {
-                    write!(f, "Successfully started providing record with {key:?}")
+                    write!(f, "Outbound: Successfully started providing record with {key:?}")
                 }
             },
             P2pEvent::Inbound(event) => match event {
                 P2pInboundEvent::ProviderAdded(key) => {
-                    write!(f, "Received new provider for {key:?}")
+                    write!(f, "Inbound: Received new provider for {key:?}")
                 }
                 P2pInboundEvent::RecordStored(source_id, key, value) => write!(
                     f,
-                    "Stored new record from {source_id} with {key:?} and value {}",
+                    "Inbound: Stored new record from {source_id} with {key:?} and value {}",
                     String::from_utf8(value.clone()).unwrap()
                 ),
             },
