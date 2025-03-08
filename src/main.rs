@@ -112,37 +112,8 @@ impl App {
     }
 
     fn view(&self) -> Element<Message> {
-        let message_log: Element<_> = if self.state.messages.is_empty() {
-            center(text("Your messages will appear here...").color(color!(0x888888))).into()
-        } else {
-            let messages_elements = self
-                .state
-                .messages
-                .iter()
-                .map(|m| format!("{m}"))
-                .map(text)
-                .map(Element::from);
-
-            scrollable(column(messages_elements).spacing(10))
-                .id(MESSAGE_LOG.clone())
-                .height(Fill)
-                .into()
-        };
-
-        let new_message_input = {
-            let mut input = text_input("Type a message...", &self.state.current_message)
-                .on_input(Message::CurrentMessageChanged)
-                .padding(10);
-
-            let mut button = button(text("Send").height(40).align_y(Center)).padding([0, 20]);
-
-            if !self.state.current_message.is_empty() {
-                input = input.on_submit(Message::UserInput(self.state.current_message.clone()));
-                button = button.on_press(Message::UserInput(self.state.current_message.clone()));
-            }
-
-            row![input, button].spacing(10).align_y(Center)
-        };
+        let message_log: Element<_> = message_log(&self.state.messages);
+        let new_message_input = new_message_input(&self.state.current_message);
 
         column![message_log, new_message_input]
             .height(Fill)
@@ -150,6 +121,38 @@ impl App {
             .spacing(10)
             .into()
     }
+}
+
+fn message_log<'a>(messages: &[P2pEvent]) -> Element<'a, Message> {
+    if messages.is_empty() {
+        center(text("Your messages will appear here...").color(color!(0x888888))).into()
+    } else {
+        let messages_elements = messages
+            .iter()
+            .map(|m| format!("{m}"))
+            .map(text)
+            .map(Element::from);
+
+        scrollable(column(messages_elements).spacing(10))
+            .id(MESSAGE_LOG.clone())
+            .height(Fill)
+            .into()
+    }
+}
+
+fn new_message_input<'a>(current_message: &String) -> Element<'a, Message> {
+    let mut input = text_input("Type a message...", current_message)
+        .on_input(Message::CurrentMessageChanged)
+        .padding(10);
+
+    let mut button = button(text("Send").height(40).align_y(Center)).padding([0, 20]);
+
+    if !current_message.is_empty() {
+        input = input.on_submit(Message::UserInput(current_message.clone()));
+        button = button.on_press(Message::UserInput(current_message.clone()));
+    }
+
+    row![input, button].spacing(10).align_y(Center).into()
 }
 
 struct P2pSub(Arc<Mutex<mpsc::Receiver<P2pEvent>>>);
