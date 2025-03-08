@@ -347,7 +347,7 @@ async fn handle_inbound_request(
                 )))
                 .await
                 .expect("Failed to send");
-        },
+        }
         _ => {}
     }
 }

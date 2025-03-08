@@ -9,7 +9,7 @@ use iced::futures::{SinkExt, StreamExt};
 use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
 use iced::window::Position;
 use iced::{Center, Element, Fill, Subscription, Task, Theme, color};
-use tracing::{Level, info, trace, warn};
+use tracing::{trace, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
