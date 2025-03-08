@@ -2,23 +2,29 @@
 #![forbid(unsafe_code)]
 
 use std::hash::Hash;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
+use crate::handlers::{
+    handle_get_record, handle_key_text_changed, handle_p2p_event, handle_put_record,
+    handle_value_text_changed,
+};
+use crate::p2p::{P2pCommand, P2pEvent};
+use crate::widgets::{event_log, input_section, network_status};
 use iced::advanced::subscription::{EventStream, Hasher, Recipe, from_recipe};
+use iced::futures::StreamExt;
 use iced::futures::channel::mpsc;
 use iced::futures::lock::Mutex;
 use iced::futures::stream::BoxStream;
-use iced::futures::{SinkExt, StreamExt};
-use iced::widget::{self, button, center, column, row, scrollable, text, text_input};
+use iced::widget::{self, column};
 use iced::window::Position;
-use iced::{Center, Element, Fill, Subscription, Task, Theme, color};
+use iced::{Element, Fill, Subscription, Task, Theme};
 use tracing::{trace, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use crate::p2p::{P2pCommand, P2pEvent};
-
+mod handlers;
 mod p2p;
+mod widgets;
 
 fn main() -> iced::Result {
     tracing_subscriber::registry()
@@ -38,8 +44,6 @@ fn main() -> iced::Result {
         .run_with(App::new)
 }
 
-static MESSAGE_LOG: LazyLock<scrollable::Id> = LazyLock::new(scrollable::Id::unique);
-
 struct App {
     p2p_control: mpsc::Sender<P2pCommand>,
     p2p_events: Arc<Mutex<mpsc::Receiver<P2pEvent>>>,
@@ -49,16 +53,20 @@ struct App {
 #[derive(Debug, Clone)]
 enum Message {
     P2pEvent(P2pEvent),
-    CurrentMessageChanged(String),
-    UserInput(String),
+    KeyTextChanged(String),
+    ValueTextChanged(String),
+    PutRecord(String, String),
+    GetRecord(String),
     ServerStarted,
     Ignore,
 }
 
 #[derive(Debug, Default)]
 struct State {
-    messages: Vec<P2pEvent>,
-    current_message: String,
+    event_log: Vec<P2pEvent>,
+    peer_count: usize,
+    current_key: String,
+    current_value: String,
 }
 
 impl App {
@@ -84,12 +92,16 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::P2pEvent(event) => handle_p2p_event(&mut self.state, event),
-            Message::CurrentMessageChanged(data) => handle_new_message(&mut self.state, data),
-            Message::UserInput(data) => {
-                handle_user_input(&mut self.state, data, self.p2p_control.clone())
-            }
             Message::ServerStarted => Task::none(),
             Message::Ignore => Task::none(),
+            Message::KeyTextChanged(data) => handle_key_text_changed(&mut self.state, data),
+            Message::ValueTextChanged(data) => handle_value_text_changed(&mut self.state, data),
+            Message::PutRecord(key, value) => {
+                handle_put_record(&mut self.state, key, value, self.p2p_control.clone())
+            }
+            Message::GetRecord(key) => {
+                handle_get_record(&mut self.state, key, self.p2p_control.clone())
+            }
         }
     }
 
@@ -115,47 +127,16 @@ impl App {
     }
 
     fn view(&self) -> Element<Message> {
-        let message_log: Element<_> = message_log(&self.state.messages);
-        let new_message_input = new_message_input(&self.state.current_message);
+        let network_status = network_status(self.state.peer_count);
+        let input_section = input_section(&self.state.current_key, &self.state.current_value);
+        let event_log = event_log(&self.state.event_log);
 
-        column![message_log, new_message_input]
+        column![network_status, input_section, event_log]
             .height(Fill)
             .padding(20)
             .spacing(10)
             .into()
     }
-}
-
-fn message_log(messages: &[P2pEvent]) -> Element<'_, Message> {
-    if messages.is_empty() {
-        center(text("Your messages will appear here...").color(color!(0x888888))).into()
-    } else {
-        let messages_elements = messages
-            .iter()
-            .map(|m| format!("{m}"))
-            .map(text)
-            .map(Element::from);
-
-        scrollable(column(messages_elements).spacing(10))
-            .id(MESSAGE_LOG.clone())
-            .height(Fill)
-            .into()
-    }
-}
-
-fn new_message_input(current_message: &str) -> Element<'_, Message> {
-    let mut input = text_input("Type a message...", current_message)
-        .on_input(Message::CurrentMessageChanged)
-        .padding(10);
-
-    let mut button = button(text("Send").height(40).align_y(Center)).padding([0, 20]);
-
-    if !current_message.is_empty() {
-        input = input.on_submit(Message::UserInput(current_message.to_owned()));
-        button = button.on_press(Message::UserInput(current_message.to_owned()));
-    }
-
-    row![input, button].spacing(10).align_y(Center).into()
 }
 
 struct P2pSub(Arc<Mutex<mpsc::Receiver<P2pEvent>>>);
@@ -176,30 +157,4 @@ impl Recipe for P2pSub {
             }
         })
     }
-}
-
-fn handle_p2p_event(state: &mut State, event: P2pEvent) -> Task<Message> {
-    state.messages.push(event);
-
-    Task::none()
-}
-
-fn handle_new_message(state: &mut State, data: String) -> Task<Message> {
-    state.current_message = data.clone();
-
-    Task::none()
-}
-
-fn handle_user_input(
-    state: &mut State,
-    data: String,
-    mut sender: mpsc::Sender<P2pCommand>,
-) -> Task<Message> {
-    state.current_message = "".to_owned();
-
-    let cmd = P2pCommand::PutRecord(data.clone(), data.into_bytes());
-
-    Task::perform(async move { sender.send(cmd).await.ok() }, |_| {
-        Message::Ignore
-    })
 }
