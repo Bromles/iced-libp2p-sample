@@ -1,6 +1,6 @@
 use std::fmt;
 use std::fmt::Formatter;
-
+use std::time::Duration;
 use iced::futures::channel::mpsc;
 use iced::futures::{SinkExt, select};
 use libp2p::futures::StreamExt;
@@ -93,6 +93,12 @@ pub async fn run(mut commands: mpsc::Receiver<P2pCommand>, mut events: mpsc::Sen
     let mut kad_config = kad::Config::default();
     kad_config.set_record_filtering(StoreInserts::FilterBoth);
 
+    let mdns_config = mdns::Config {
+        ttl: Duration::from_secs(5),
+        query_interval: Duration::from_secs(4),
+        ..Default::default()
+    };
+
     let mut swarm: Swarm<CustomBehaviour> = SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(
@@ -110,7 +116,7 @@ pub async fn run(mut commands: mpsc::Receiver<P2pCommand>, mut events: mpsc::Sen
                     kad_config,
                 ),
                 mdns: mdns::tokio::Behaviour::new(
-                    mdns::Config::default(),
+                    mdns_config,
                     key.public().to_peer_id(),
                 )
                 .expect("Failed to set up mDNS behaviour"),
