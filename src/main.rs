@@ -15,9 +15,10 @@ use iced::futures::StreamExt;
 use iced::futures::channel::mpsc;
 use iced::futures::lock::Mutex;
 use iced::futures::stream::BoxStream;
+use iced::keyboard::key;
 use iced::widget::{self, column};
 use iced::window::Position;
-use iced::{Element, Fill, Subscription, Task, Theme};
+use iced::{Element, Fill, Subscription, Task, Theme, keyboard};
 use tracing::{trace, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -57,6 +58,7 @@ enum Message {
     ValueTextChanged(String),
     PutRecord(String, String),
     GetRecord(String),
+    FocusNext,
     ServerStarted,
     Ignore,
 }
@@ -94,6 +96,7 @@ impl App {
             Message::P2pEvent(event) => handle_p2p_event(&mut self.state, event),
             Message::ServerStarted => Task::none(),
             Message::Ignore => Task::none(),
+            Message::FocusNext => widget::focus_next(),
             Message::KeyTextChanged(data) => handle_key_text_changed(&mut self.state, data),
             Message::ValueTextChanged(data) => handle_value_text_changed(&mut self.state, data),
             Message::PutRecord(key, value) => {
@@ -106,7 +109,14 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        from_recipe(P2pSub(self.p2p_events.clone()))
+        let p2p_sub = from_recipe(P2pSub(self.p2p_events.clone()));
+
+        let focus_sub = keyboard::on_key_release(|key, _modifiers| match key {
+            keyboard::Key::Named(key::Named::Tab) => Some(Message::FocusNext),
+            _ => None,
+        });
+
+        Subscription::batch([p2p_sub, focus_sub])
     }
 
     fn theme(&self) -> Theme {
