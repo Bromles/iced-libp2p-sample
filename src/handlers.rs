@@ -1,8 +1,8 @@
 use crate::p2p::{P2pCommand, P2pEvent};
-use crate::{Message, State};
 use iced::Task;
 use iced::futures::SinkExt;
 use iced::futures::channel::mpsc;
+use crate::app::{Message, State};
 
 pub fn handle_p2p_event(state: &mut State, event: P2pEvent) -> Task<Message> {
     state.event_log.push(event.clone());

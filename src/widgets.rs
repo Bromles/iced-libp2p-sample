@@ -1,4 +1,4 @@
-use crate::Message;
+use crate::app::Message;
 use crate::p2p::P2pEvent;
 use iced::widget::{button, center, column, row, scrollable, text, text_input};
 use iced::{Center, Element, Fill, color};
