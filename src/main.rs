@@ -2,8 +2,6 @@
 #![forbid(unsafe_code)]
 
 use crate::app::App;
-use iced::advanced::subscription::Recipe;
-use iced::futures::StreamExt;
 use iced::window::Position;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
