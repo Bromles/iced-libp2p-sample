@@ -1,1 +1,5 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/JwzlJxZ-)
+# This is a sample Iced app showcasing basic libp2p integration
+
+### This code is sloppy and was made as a Proof of Concept 
+### In real life you should organize it better and probably use other crates like tokio
+### You have been warned
