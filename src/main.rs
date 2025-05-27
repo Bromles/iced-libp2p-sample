@@ -15,7 +15,7 @@ fn main() -> iced::Result {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "p2p_application_development_Bromles=debug,wgpu_core=info".into()
+                "iced-libp2p-sample=debug,wgpu_core=info".into()
             }),
         )
         .with(tracing_subscriber::fmt::layer())

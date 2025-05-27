@@ -1,5 +1,5 @@
 [package]
-name = "p2p-application-development-Bromles"
+name = "iced-libp2p-sample"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
